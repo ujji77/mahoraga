@@ -141,40 +141,6 @@
     }
 
     /* File drop zone (shown when FBX missing) */
-    #drop-zone {
-      position: fixed;
-      inset: 0;
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      background: rgba(0,0,0,0.85);
-      color: white;
-      font-size: 18px;
-      gap: 16px;
-      cursor: pointer;
-      pointer-events: all;
-      z-index: 10;
-    }
-
-    #drop-zone.visible {
-      display: flex;
-    }
-
-    #drop-zone .icon {
-      font-size: 64px;
-      opacity: 0.6;
-    }
-
-    #drop-zone p {
-      opacity: 0.7;
-      font-size: 14px;
-    }
-
-    #drop-zone.drag-over {
-      background: rgba(255, 60, 60, 0.3);
-    }
-
     /* Flash effect */
     #flash {
       position: fixed;
@@ -225,12 +191,8 @@
 </div>
 
 <!-- FBX drop zone fallback -->
-<div id="drop-zone" role="button" tabindex="0">
-  <div class="icon">📦</div>
-  <strong>Drop Roar.fbx here</strong>
-  <p>or click to browse</p>
-  <input id="file-input" type="file" accept=".fbx" style="display:none">
-</div>
+
+<!-- Adjust panel -->
 
 <!-- MediaPipe Hands (legacy bundle, no ES module needed) -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
@@ -247,8 +209,6 @@ const leftDot   = document.getElementById('left-dot');
 const rightDot  = document.getElementById('right-dot');
 const chargeWrap = document.getElementById('charge-wrap');
 const chargeFill = document.getElementById('charge-fill');
-const dropZone  = document.getElementById('drop-zone');
-const fileInput = document.getElementById('file-input');
 
 const CIRCUMFERENCE = 2 * Math.PI * 56; // ~351.86
 
@@ -284,116 +244,93 @@ fillLight.position.set(-200, 100, 100);
 scene.add(fillLight);
 
 // ─── FBX LOADER ──────────────────────────────────────────────────────────────
-let mixer          = null;
-let fbxModel       = null;
-let animAction     = null;
-let modelReady     = false;
+let landModel  = null;  let landMixer  = null;  let landAction  = null;
+let roarModel  = null;  let roarMixer  = null;  let roarAction  = null;
+let landReady  = false;
+let roarReady  = false;
 let isAnimating    = false;
 let chargeProgress = 0;
 
+
 const fbxLoader = new FBXLoader();
 
-function loadFBX(source) {
-  // source = URL string or ArrayBuffer
-  setStatus('Loading Roar.fbx…');
+const MODEL = { scale: 585, posX: 0, posY: -306, posZ: -80, rotX: 0, rotY: 0, rotZ: 0 };
 
-  const onLoad = (fbx) => {
-    fbxModel = fbx;
+function applyTransformToModel(fbx) {
+  const box    = new THREE.Box3().setFromObject(fbx);
+  const size   = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z);
+  fbx.scale.setScalar(MODEL.scale / maxDim);
 
-    // Auto-fit to scene
-    const box  = new THREE.Box3().setFromObject(fbx);
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-    const scale  = 350 / maxDim;
-    fbx.scale.setScalar(scale);
+  box.setFromObject(fbx);
+  const centre = box.getCenter(new THREE.Vector3());
+  const DEG    = Math.PI / 180;
+  fbx.position.set(-centre.x + MODEL.posX, -centre.y + MODEL.posY, -centre.z + MODEL.posZ);
+  fbx.rotation.set(MODEL.rotX * DEG, MODEL.rotY * DEG, MODEL.rotZ * DEG);
 
-    // Re-centre after scale
-    box.setFromObject(fbx);
-    const centre = box.getCenter(new THREE.Vector3());
-    fbx.position.set(-centre.x, -centre.y, -centre.z - 80);
-
-    fbx.visible = false;
-
-    // Traverse and enable shadows
-    fbx.traverse(child => {
-      if (child.isMesh) {
-        child.castShadow    = true;
-        child.receiveShadow = true;
-        if (child.material) {
-          child.material.side = THREE.DoubleSide;
-        }
-      }
-    });
-
-    scene.add(fbx);
-
-    if (fbx.animations && fbx.animations.length > 0) {
-      mixer     = new THREE.AnimationMixer(fbx);
-      animAction = mixer.clipAction(fbx.animations[0]);
-      animAction.setLoop(THREE.LoopOnce);
-      animAction.clampWhenFinished = true;
-
-      mixer.addEventListener('finished', () => {
-        setTimeout(() => {
-          if (fbxModel) fbxModel.visible = false;
-          isAnimating = false;
-          setStatus('Raise both fists to summon again!');
-        }, 600);
-      });
+  fbx.traverse(child => {
+    if (child.isMesh) {
+      child.castShadow = child.receiveShadow = true;
+      if (child.material) child.material.side = THREE.DoubleSide;
     }
+  });
+}
 
-    modelReady = true;
-    dropZone.classList.remove('visible');
+function checkAllLoaded() {
+  if (landReady && roarReady) {
     setStatus('Raise both fists to summon Mahoraga!');
-  };
-
-  const onProgress = (e) => {
-    if (e.total) {
-      const pct = Math.round((e.loaded / e.total) * 100);
-      setStatus(`Loading… ${pct}%`);
-    }
-  };
-
-  const onError = (err) => {
-    console.error('FBX error:', err);
-    setStatus('Roar.fbx not found — drag it onto the screen');
-    dropZone.classList.add('visible');
-  };
-
-  if (typeof source === 'string') {
-    fbxLoader.load(source, onLoad, onProgress, onError);
-  } else {
-    // ArrayBuffer from drag-drop
-    fbxLoader.parse(source, '', onLoad);
   }
 }
 
-// Try loading from same directory first
-loadFBX('Roar.fbx');
+// Load Land.fbx
+setStatus('Loading Land.fbx…');
+fbxLoader.load('Land.fbx', (fbx) => {
+  landModel = fbx;
+  applyTransformToModel(fbx);
+  fbx.visible = false;
+  scene.add(fbx);
 
-// ─── DRAG & DROP FALLBACK ────────────────────────────────────────────────────
-dropZone.addEventListener('dragover', (e) => {
-  e.preventDefault();
-  dropZone.classList.add('drag-over');
-});
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', (e) => {
-  e.preventDefault();
-  dropZone.classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file && file.name.toLowerCase().endsWith('.fbx')) {
-    file.arrayBuffer().then(buf => loadFBX(buf));
+  if (fbx.animations?.length) {
+    landMixer  = new THREE.AnimationMixer(fbx);
+    landAction = landMixer.clipAction(fbx.animations[0]);
+    landAction.setLoop(THREE.LoopOnce);
+    landAction.clampWhenFinished = true;
   }
-});
-dropZone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => {
-  const file = fileInput.files[0];
-  if (file) file.arrayBuffer().then(buf => loadFBX(buf));
+
+  landReady = true;
+  checkAllLoaded();
+}, null, (err) => {
+  console.error('Land.fbx load error:', err);
+  setStatus('Land.fbx not found — place it in this folder');
 });
 
-// ─── SUMMON TRIGGER ───────────────────────────────────────────────────────────
+// Load Roar.fbx
+fbxLoader.load('Roar.fbx', (fbx) => {
+  roarModel = fbx;
+  applyTransformToModel(fbx);
+  fbx.visible = false;
+  scene.add(fbx);
+
+  if (fbx.animations?.length) {
+    roarMixer  = new THREE.AnimationMixer(fbx);
+    roarAction = roarMixer.clipAction(fbx.animations[0]);
+    roarAction.setLoop(THREE.LoopRepeat, 3);
+    roarAction.clampWhenFinished = true;
+  }
+
+  roarReady = true;
+  checkAllLoaded();
+}, (e) => {
+  if (e.total) setStatus(`Loading Roar.fbx… ${Math.round(e.loaded/e.total*100)}%`);
+}, (err) => {
+  console.error('Roar.fbx load error:', err);
+  setStatus('Error loading Roar.fbx — check console');
+});
+
+
+// ─── SUMMON SEQUENCE ──────────────────────────────────────────────────────────
 function triggerSummon() {
-  if (!modelReady || isAnimating) return;
+  if (!landReady || !roarReady || isAnimating) return;
   isAnimating = true;
 
   // Flash
@@ -403,27 +340,57 @@ function triggerSummon() {
     flashEl.style.transition = 'opacity 0.4s ease-out';
     flashEl.style.opacity = '0';
   });
-
-  // Boom up key light
   keyLight.intensity = 12;
   setTimeout(() => { keyLight.intensity = 3; }, 300);
 
-  if (fbxModel) {
-    fbxModel.visible = true;
-    if (animAction) {
-      animAction.reset();
-      animAction.play();
+  // Step 1: Land.fbx — play once
+  if (roarModel) roarModel.visible = false;
+  if (landModel) {
+    landModel.visible = true;
+    if (landAction) {
+      landAction.reset();
+      landAction.play();
+
+      const onLandDone = () => {
+        landMixer.removeEventListener('finished', onLandDone);
+        landModel.visible = false;
+        playRoar();
+      };
+      landMixer.addEventListener('finished', onLandDone);
     } else {
-      // No animation clip — hold for 3 s then hide
-      setTimeout(() => {
-        fbxModel.visible = false;
-        isAnimating = false;
-        setStatus('Raise both fists to summon again!');
-      }, 3000);
+      // no clip on Land — skip straight to Roar
+      landModel.visible = false;
+      playRoar();
     }
+  } else {
+    playRoar();
   }
 
   setStatus('');
+}
+
+// Step 2: Roar.fbx — play 3 times then hide
+function playRoar() {
+  if (!roarModel) { finish(); return; }
+  roarModel.visible = true;
+  if (roarAction) {
+    roarAction.reset();
+    roarAction.play();
+
+    const onRoarDone = () => {
+      roarMixer.removeEventListener('finished', onRoarDone);
+      roarModel.visible = false;
+      finish();
+    };
+    roarMixer.addEventListener('finished', onRoarDone);
+  } else {
+    setTimeout(() => { roarModel.visible = false; finish(); }, 3000);
+  }
+}
+
+function finish() {
+  isAnimating = false;
+  setStatus('Raise both fists to summon again!');
 }
 
 // ─── RENDER LOOP ─────────────────────────────────────────────────────────────
@@ -434,7 +401,8 @@ function animateScene() {
   requestAnimationFrame(animateScene);
   const delta = clock.getDelta();
 
-  if (mixer) mixer.update(delta);
+  if (landMixer) landMixer.update(delta);
+  if (roarMixer) roarMixer.update(delta);
 
   // Pulse key light during charge
   if (chargeProgress > 0 && !isAnimating) {
