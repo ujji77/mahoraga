@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mahoraga AR — Raise Both Fists</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+
+    #webcam {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+      z-index: 1;
+    }
+
+    #three-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    /* ── Overlay UI ── */
+    #ui {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 3;
+    }
+
+    /* Hand fist indicators */
+    #hand-status {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 24px;
+      align-items: center;
+    }
+
+    .hand-dot {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.15);
+      border: 2px solid rgba(255,255,255,0.25);
+      transition: all 0.15s ease;
+    }
+
+    .hand-dot.fist {
+      background: rgba(255, 60, 60, 0.85);
+      border-color: rgba(255, 120, 120, 1);
+      box-shadow: 0 0 16px rgba(255, 60, 60, 0.9), 0 0 32px rgba(255, 0, 0, 0.4);
+    }
+
+    .hand-label {
+      font-size: 11px;
+      color: rgba(255,255,255,0.4);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .hand-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+    }
+
+    /* Charge ring */
+    #charge-wrap {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 130px;
+      height: 130px;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+    }
+
+    #charge-wrap.visible {
+      opacity: 1;
+    }
+
+    #charge-wrap svg {
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg);
+    }
+
+    .charge-track {
+      fill: none;
+      stroke: rgba(255, 255, 255, 0.08);
+      stroke-width: 5;
+    }
+
+    .charge-fill {
+      fill: none;
+      stroke: rgba(255, 60, 60, 0.9);
+      stroke-width: 5;
+      stroke-linecap: round;
+      r: 56;
+      cx: 65;
+      cy: 65;
+      stroke-dasharray: 351.86;
+      stroke-dashoffset: 351.86;
+      filter: drop-shadow(0 0 6px rgba(255,0,0,0.8));
+      transition: stroke-dashoffset 0.05s linear;
+    }
+
+    /* Bottom status bar */
+    #status {
+      position: absolute;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.75);
+      font-size: 14px;
+      background: rgba(0,0,0,0.55);
+      padding: 8px 22px;
+      border-radius: 30px;
+      white-space: nowrap;
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    /* File drop zone (shown when FBX missing) */
+    #drop-zone {
+      position: fixed;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.85);
+      color: white;
+      font-size: 18px;
+      gap: 16px;
+      cursor: pointer;
+      pointer-events: all;
+      z-index: 10;
+    }
+
+    #drop-zone.visible {
+      display: flex;
+    }
+
+    #drop-zone .icon {
+      font-size: 64px;
+      opacity: 0.6;
+    }
+
+    #drop-zone p {
+      opacity: 0.7;
+      font-size: 14px;
+    }
+
+    #drop-zone.drag-over {
+      background: rgba(255, 60, 60, 0.3);
+    }
+
+    /* Flash effect */
+    #flash {
+      position: fixed;
+      inset: 0;
+      background: white;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 5;
+    }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+      "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.0/esm/index.js"
+    }
+  }
+  </script>
+</head>
+<body>
+
+<video id="webcam" autoplay playsinline muted></video>
+<canvas id="three-canvas"></canvas>
+<div id="flash"></div>
+
+<div id="ui">
+  <div id="hand-status">
+    <div class="hand-group">
+      <div class="hand-dot" id="left-dot"></div>
+      <span class="hand-label">L</span>
+    </div>
+    <div class="hand-group">
+      <div class="hand-dot" id="right-dot"></div>
+      <span class="hand-label">R</span>
+    </div>
+  </div>
+
+  <div id="charge-wrap">
+    <svg viewBox="0 0 130 130">
+      <circle class="charge-track" cx="65" cy="65" r="56" />
+      <circle class="charge-fill" id="charge-fill" />
+    </svg>
+  </div>
+
+  <div id="status">Initializing camera...</div>
+</div>
+
+<!-- FBX drop zone fallback -->
+<div id="drop-zone" role="button" tabindex="0">
+  <div class="icon">📦</div>
+  <strong>Drop Roar.fbx here</strong>
+  <p>or click to browse</p>
+  <input id="file-input" type="file" accept=".fbx" style="display:none">
+</div>
+
+<!-- MediaPipe Hands (legacy bundle, no ES module needed) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
+
+<script type="module">
+import * as THREE from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
+// ─── DOM REFS ────────────────────────────────────────────────────────────────
+const videoEl   = document.getElementById('webcam');
+const flashEl   = document.getElementById('flash');
+const statusEl  = document.getElementById('status');
+const leftDot   = document.getElementById('left-dot');
+const rightDot  = document.getElementById('right-dot');
+const chargeWrap = document.getElementById('charge-wrap');
+const chargeFill = document.getElementById('charge-fill');
+const dropZone  = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+const CIRCUMFERENCE = 2 * Math.PI * 56; // ~351.86
+
+function setStatus(msg) { statusEl.textContent = msg; }
+
+// ─── THREE.JS ────────────────────────────────────────────────────────────────
+const threeCanvas = document.getElementById('three-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.setClearColor(0x000000, 0);
+
+const scene  = new THREE.Scene();
+const cam3d  = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 5000);
+cam3d.position.set(0, 0, 400);
+
+// Lighting — red/dramatic to match a summoning vibe
+const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambient);
+
+const keyLight = new THREE.DirectionalLight(0xff3300, 3);
+keyLight.position.set(0, 200, 200);
+keyLight.castShadow = true;
+scene.add(keyLight);
+
+const rimLight = new THREE.DirectionalLight(0x3355ff, 1.5);
+rimLight.position.set(0, -100, -200);
+scene.add(rimLight);
+
+const fillLight = new THREE.DirectionalLight(0xffffff, 0.8);
+fillLight.position.set(-200, 100, 100);
+scene.add(fillLight);
+
+// ─── FBX LOADER ──────────────────────────────────────────────────────────────
+let mixer          = null;
+let fbxModel       = null;
+let animAction     = null;
+let modelReady     = false;
+let isAnimating    = false;
+let chargeProgress = 0;
+
+const fbxLoader = new FBXLoader();
+
+function loadFBX(source) {
+  // source = URL string or ArrayBuffer
+  setStatus('Loading Roar.fbx…');
+
+  const onLoad = (fbx) => {
+    fbxModel = fbx;
+
+    // Auto-fit to scene
+    const box  = new THREE.Box3().setFromObject(fbx);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const scale  = 350 / maxDim;
+    fbx.scale.setScalar(scale);
+
+    // Re-centre after scale
+    box.setFromObject(fbx);
+    const centre = box.getCenter(new THREE.Vector3());
+    fbx.position.set(-centre.x, -centre.y, -centre.z - 80);
+
+    fbx.visible = false;
+
+    // Traverse and enable shadows
+    fbx.traverse(child => {
+      if (child.isMesh) {
+        child.castShadow    = true;
+        child.receiveShadow = true;
+        if (child.material) {
+          child.material.side = THREE.DoubleSide;
+        }
+      }
+    });
+
+    scene.add(fbx);
+
+    if (fbx.animations && fbx.animations.length > 0) {
+      mixer     = new THREE.AnimationMixer(fbx);
+      animAction = mixer.clipAction(fbx.animations[0]);
+      animAction.setLoop(THREE.LoopOnce);
+      animAction.clampWhenFinished = true;
+
+      mixer.addEventListener('finished', () => {
+        setTimeout(() => {
+          if (fbxModel) fbxModel.visible = false;
+          isAnimating = false;
+          setStatus('Raise both fists to summon again!');
+        }, 600);
+      });
+    }
+
+    modelReady = true;
+    dropZone.classList.remove('visible');
+    setStatus('Raise both fists to summon Mahoraga!');
+  };
+
+  const onProgress = (e) => {
+    if (e.total) {
+      const pct = Math.round((e.loaded / e.total) * 100);
+      setStatus(`Loading… ${pct}%`);
+    }
+  };
+
+  const onError = (err) => {
+    console.error('FBX error:', err);
+    setStatus('Roar.fbx not found — drag it onto the screen');
+    dropZone.classList.add('visible');
+  };
+
+  if (typeof source === 'string') {
+    fbxLoader.load(source, onLoad, onProgress, onError);
+  } else {
+    // ArrayBuffer from drag-drop
+    fbxLoader.parse(source, '', onLoad);
+  }
+}
+
+// Try loading from same directory first
+loadFBX('Roar.fbx');
+
+// ─── DRAG & DROP FALLBACK ────────────────────────────────────────────────────
+dropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropZone.classList.add('drag-over');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file && file.name.toLowerCase().endsWith('.fbx')) {
+    file.arrayBuffer().then(buf => loadFBX(buf));
+  }
+});
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  if (file) file.arrayBuffer().then(buf => loadFBX(buf));
+});
+
+// ─── SUMMON TRIGGER ───────────────────────────────────────────────────────────
+function triggerSummon() {
+  if (!modelReady || isAnimating) return;
+  isAnimating = true;
+
+  // Flash
+  flashEl.style.transition = 'none';
+  flashEl.style.opacity = '0.85';
+  requestAnimationFrame(() => {
+    flashEl.style.transition = 'opacity 0.4s ease-out';
+    flashEl.style.opacity = '0';
+  });
+
+  // Boom up key light
+  keyLight.intensity = 12;
+  setTimeout(() => { keyLight.intensity = 3; }, 300);
+
+  if (fbxModel) {
+    fbxModel.visible = true;
+    if (animAction) {
+      animAction.reset();
+      animAction.play();
+    } else {
+      // No animation clip — hold for 3 s then hide
+      setTimeout(() => {
+        fbxModel.visible = false;
+        isAnimating = false;
+        setStatus('Raise both fists to summon again!');
+      }, 3000);
+    }
+  }
+
+  setStatus('');
+}
+
+// ─── RENDER LOOP ─────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+
+// Subtle idle rotation for fbxModel
+function animateScene() {
+  requestAnimationFrame(animateScene);
+  const delta = clock.getDelta();
+
+  if (mixer) mixer.update(delta);
+
+  // Pulse key light during charge
+  if (chargeProgress > 0 && !isAnimating) {
+    keyLight.intensity = 3 + Math.sin(Date.now() * 0.01) * chargeProgress * 4;
+  }
+
+  renderer.render(scene, cam3d);
+}
+animateScene();
+
+// ─── RESIZE ──────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  cam3d.aspect = window.innerWidth / window.innerHeight;
+  cam3d.updateProjectionMatrix();
+});
+
+// ─── MEDIAPIPE HANDS ─────────────────────────────────────────────────────────
+let leftFist  = false;
+let rightFist = false;
+let chargeStart = null;
+const CHARGE_MS = 700; // hold time before summon
+
+function isFist(lm) {
+  // Finger tips:  index=8, middle=12, ring=16, pinky=20
+  // Finger MCPs:  index=5, middle=9,  ring=13, pinky=17
+  const tips = [8, 12, 16, 20];
+  const mcps = [5,  9, 13, 17];
+  let bent = 0;
+  for (let i = 0; i < 4; i++) {
+    // In image coords y increases downward;
+    // a curled finger tip will be below (higher y than) its MCP
+    if (lm[tips[i]].y > lm[mcps[i]].y) bent++;
+  }
+  return bent >= 3;
+}
+
+const hands = new Hands({
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}`
+});
+
+hands.setOptions({
+  maxNumHands: 2,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.5
+});
+
+hands.onResults((results) => {
+  leftFist  = false;
+  rightFist = false;
+
+  if (results.multiHandLandmarks) {
+    for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+      const lm    = results.multiHandLandmarks[i];
+      // MediaPipe reports from its own POV; with mirrored video
+      // model's "Left" = user's right and vice-versa
+      const label = results.multiHandedness[i].label; // 'Left' | 'Right'
+      const fist  = isFist(lm);
+      if (label === 'Left')  rightFist = fist;
+      else                   leftFist  = fist;
+    }
+  }
+
+  // Update dots
+  leftDot.classList.toggle('fist',  leftFist);
+  rightDot.classList.toggle('fist', rightFist);
+
+  const both = leftFist && rightFist;
+
+  if (both && !isAnimating) {
+    if (!chargeStart) chargeStart = performance.now();
+    chargeProgress = Math.min((performance.now() - chargeStart) / CHARGE_MS, 1);
+
+    chargeWrap.classList.add('visible');
+    chargeFill.style.strokeDashoffset = CIRCUMFERENCE * (1 - chargeProgress);
+
+    if (chargeProgress >= 1) {
+      resetCharge();
+      triggerSummon();
+    }
+  } else {
+    resetCharge();
+  }
+});
+
+function resetCharge() {
+  chargeStart = null;
+  chargeProgress = 0;
+  chargeWrap.classList.remove('visible');
+  chargeFill.style.strokeDashoffset = CIRCUMFERENCE;
+}
+
+// ─── CAMERA ──────────────────────────────────────────────────────────────────
+async function startCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus('⚠ Camera unavailable — must open via https://localhost:8443 (run serve.py)');
+    return;
+  }
+  setStatus('Requesting camera…');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    videoEl.srcObject = stream;
+    videoEl.play().catch(() => {}); // autoplay may handle it; ignore the rejection
+
+    await new Promise((resolve) => {
+      if (videoEl.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) return resolve();
+      videoEl.addEventListener('loadeddata', resolve, { once: true });
+    });
+
+    setStatus('Camera active — loading hands model…');
+
+    let handModelReady = false;
+    // Warm up MediaPipe — first send can take a moment
+    await hands.send({ image: videoEl });
+    handModelReady = true;
+
+    async function processFrame() {
+      if (videoEl.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+        await hands.send({ image: videoEl });
+      }
+      requestAnimationFrame(processFrame);
+    }
+    processFrame();
+
+    if (modelReady) {
+      setStatus('Raise both fists to summon Mahoraga!');
+    } else {
+      setStatus('Loading Roar.fbx…');
+    }
+  } catch (err) {
+    setStatus(`Camera error: ${err.message}`);
+    console.error(err);
+  }
+}
+
+startCamera();
+</script>
+</body>
+</html>
