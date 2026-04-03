@@ -331,6 +331,19 @@ const fillLight = new THREE.DirectionalLight(0xffffff, 0.8);
 fillLight.position.set(-200, 100, 100);
 scene.add(fillLight);
 
+// Single group so hand controls move all models together
+const controlGroup = new THREE.Group();
+scene.add(controlGroup);
+
+// ─── HAND CONTROL STATE ───────────────────────────────────────────────────────
+let hasSummoned = false; // after first summon, fist-charge is disabled
+let hintInterval = null;
+let isIdling  = false;
+let ctrlRotX  = 0, ctrlRotY  = 0;
+let ctrlScale = 1;
+let ctrlPanX  = 0, ctrlPanY  = 0;
+let prevHandCtrl = null; // [{x,y}] from last frame
+
 // ─── FBX LOADER ──────────────────────────────────────────────────────────────
 let landModel  = null;  let landMixer  = null;  let landAction  = null;
 let roarModel  = null;  let roarMixer  = null;  let roarAction  = null;
@@ -378,7 +391,7 @@ fbxLoader.load('Land.fbx', (fbx) => {
   landModel = fbx;
   applyTransformToModel(fbx);
   fbx.visible = false;
-  scene.add(fbx);
+  controlGroup.add(fbx);
 
   if (fbx.animations?.length) {
     landMixer  = new THREE.AnimationMixer(fbx);
@@ -399,7 +412,7 @@ fbxLoader.load('Roar.fbx', (fbx) => {
   roarModel = fbx;
   applyTransformToModel(fbx);
   fbx.visible = false;
-  scene.add(fbx);
+  controlGroup.add(fbx);
 
   if (fbx.animations?.length) {
     roarMixer  = new THREE.AnimationMixer(fbx);
@@ -422,7 +435,7 @@ fbxLoader.load('Idle.fbx', (fbx) => {
   idleModel = fbx;
   applyTransformToModel(fbx);
   fbx.visible = false;
-  scene.add(fbx);
+  controlGroup.add(fbx);
 
   if (fbx.animations?.length) {
     idleMixer  = new THREE.AnimationMixer(fbx);
@@ -491,6 +504,7 @@ function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 async function triggerSummon() {
   if (!landReady || !roarReady || isAnimating) return;
   isAnimating = true;
+  hasSummoned = true;
   setStatus('');
 
   // Initial flash
@@ -586,12 +600,25 @@ function playIdle() {
     idleAction.reset();
     idleAction.play();
   }
+  isIdling = true;
   finish();
 }
 
 function finish() {
   isAnimating = false;
-  setStatus('Raise both fists to summon again!');
+  if (isIdling) {
+    const hints = [
+      'Open hand — rotate',
+      'Two hands — zoom & pan',
+    ];
+    let hi = 0;
+    setStatus(hints[hi]);
+    clearInterval(hintInterval);
+    hintInterval = setInterval(() => {
+      hi = (hi + 1) % hints.length;
+      setStatus(hints[hi]);
+    }, 3000);
+  }
 }
 
 // ─── RENDER LOOP ─────────────────────────────────────────────────────────────
@@ -605,6 +632,15 @@ function animateScene() {
   if (landMixer) landMixer.update(delta);
   if (roarMixer) roarMixer.update(delta);
   if (idleMixer) idleMixer.update(delta);
+
+  // Apply hand control transforms during idle
+  if (isIdling) {
+    controlGroup.rotation.x = ctrlRotX;
+    controlGroup.rotation.y = ctrlRotY;
+    controlGroup.scale.setScalar(ctrlScale);
+    controlGroup.position.x = ctrlPanX;
+    controlGroup.position.y = ctrlPanY;
+  }
 
   // Pulse key light during charge
   if (chargeProgress > 0 && !isAnimating) {
@@ -675,7 +711,7 @@ hands.onResults((results) => {
 
   const both = leftFist && rightFist;
 
-  if (both && !isAnimating) {
+  if (both && !isAnimating && !hasSummoned) {
     if (!chargeStart) chargeStart = performance.now();
     chargeProgress = Math.min((performance.now() - chargeStart) / CHARGE_MS, 1);
 
@@ -688,6 +724,52 @@ hands.onResults((results) => {
     }
   } else {
     resetCharge();
+  }
+
+  // ── Hand control (idle mode only) ──────────────────────────────────────────
+  if (isIdling && results.multiHandLandmarks) {
+    // Collect open-hand palm centres (ignore fists — they're for summoning)
+    const openHands = [];
+    for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+      const lm = results.multiHandLandmarks[i];
+      if (!isFist(lm)) {
+        // Palm centre = average of wrist(0) + 4 knuckles(5,9,13,17)
+        const cx = (lm[0].x + lm[5].x + lm[9].x + lm[13].x + lm[17].x) / 5;
+        const cy = (lm[0].y + lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 5;
+        openHands.push({ x: cx, y: cy });
+      }
+    }
+
+    if (prevHandCtrl && openHands.length > 0 && prevHandCtrl.length === openHands.length) {
+      if (openHands.length === 1) {
+        // One open hand → rotate
+        // Negate X delta because video is mirrored
+        const dx = -(openHands[0].x - prevHandCtrl[0].x);
+        const dy =   openHands[0].y - prevHandCtrl[0].y;
+        ctrlRotY += dx * 8;
+        ctrlRotX += dy * 8;
+      } else if (openHands.length === 2) {
+        // Two open hands → pinch to zoom + pan
+        const currDist = Math.hypot(openHands[0].x - openHands[1].x, openHands[0].y - openHands[1].y);
+        const prevDist = Math.hypot(prevHandCtrl[0].x - prevHandCtrl[1].x, prevHandCtrl[0].y - prevHandCtrl[1].y);
+        if (prevDist > 0.01) {
+          ctrlScale *= currDist / prevDist;
+          ctrlScale  = Math.max(0.3, Math.min(4, ctrlScale));
+        }
+
+        // Midpoint movement → pan
+        const currMidX = (openHands[0].x + openHands[1].x) / 2;
+        const currMidY = (openHands[0].y + openHands[1].y) / 2;
+        const prevMidX = (prevHandCtrl[0].x + prevHandCtrl[1].x) / 2;
+        const prevMidY = (prevHandCtrl[0].y + prevHandCtrl[1].y) / 2;
+        ctrlPanX += -(currMidX - prevMidX) * 600;
+        ctrlPanY += -(currMidY - prevMidY) * 500;
+      }
+    }
+
+    prevHandCtrl = openHands.length > 0 ? openHands : null;
+  } else if (!isIdling) {
+    prevHandCtrl = null;
   }
 });
 
@@ -763,6 +845,17 @@ document.getElementById('btn-restart').addEventListener('click', () => {
   if (landModel) landModel.visible = false;
   if (roarModel) roarModel.visible = false;
   if (idleModel) idleModel.visible = false;
+
+  hasSummoned = false;
+  clearInterval(hintInterval);
+  isIdling = false;
+  prevHandCtrl = null;
+  ctrlRotX = 0; ctrlRotY = 0;
+  ctrlScale = 1;
+  ctrlPanX = 0; ctrlPanY = 0;
+  controlGroup.rotation.set(0, 0, 0);
+  controlGroup.scale.setScalar(1);
+  controlGroup.position.set(0, 0, 0);
 
   summonTextEl.classList.remove('visible');
   summonTextEl.className = '';
