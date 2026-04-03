@@ -1,0 +1,6 @@
+# Local HTTPS dev server — certs are generated on first run, not needed in prod
+cert.pem
+key.pem
+
+# macOS
+.DS_Store

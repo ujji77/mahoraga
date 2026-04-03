@@ -124,12 +124,19 @@
       transition: stroke-dashoffset 0.05s linear;
     }
 
-    /* Bottom status bar */
-    #status {
+    /* Bottom bar */
+    #bottom-bar {
       position: absolute;
       bottom: 28px;
       left: 50%;
       transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      pointer-events: none;
+    }
+
+    #status {
       color: rgba(255,255,255,0.75);
       font-size: 14px;
       background: rgba(0,0,0,0.55);
@@ -140,7 +147,82 @@
       border: 1px solid rgba(255,255,255,0.08);
     }
 
-    /* File drop zone (shown when FBX missing) */
+    .bottom-btn {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.75);
+      font-size: 17px;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto;
+      transition: background 0.15s;
+      flex-shrink: 0;
+    }
+
+    .bottom-btn:hover { background: rgba(255,255,255,0.12); }
+
+    /* ── Dark Souls summon text ── */
+    #summon-text {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 4;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.75s ease;
+    }
+
+    #summon-text.visible { opacity: 1; }
+
+    #summon-line {
+      display: block;
+      font-family: 'Cinzel', 'Garamond', serif;
+      text-align: center;
+      padding: 0 48px;
+    }
+
+    /* Line 1 — "With this treasure, I summon..." */
+    #summon-text.line1 #summon-line {
+      font-size: clamp(16px, 2.2vw, 30px);
+      font-weight: 400;
+      letter-spacing: 0.18em;
+      color: rgba(215, 200, 170, 0.92);
+      text-shadow:
+        0 0 40px rgba(200, 160, 70, 0.55),
+        0 2px 6px rgba(0, 0, 0, 0.9);
+    }
+
+    /* Line 2 — "Eight-Handled Sword Divergent Sila Divine General" */
+    #summon-text.line2 #summon-line {
+      font-size: clamp(14px, 2vw, 26px);
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      color: rgba(230, 215, 185, 0.95);
+      text-shadow:
+        0 0 50px rgba(210, 170, 80, 0.65),
+        0 2px 6px rgba(0, 0, 0, 0.95);
+    }
+
+    /* Line 3 — "MAHORAGA" */
+    #summon-text.line3 #summon-line {
+      font-size: clamp(52px, 9vw, 110px);
+      font-weight: 900;
+      letter-spacing: 0.3em;
+      color: rgba(255, 245, 215, 1);
+      text-shadow:
+        0 0 80px rgba(255, 200, 60, 0.85),
+        0 0 30px rgba(255, 140, 0, 0.6),
+        0 4px 12px rgba(0, 0, 0, 1);
+    }
+
     /* Flash effect */
     #flash {
       position: fixed;
@@ -151,6 +233,10 @@
       z-index: 5;
     }
   </style>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&display=swap" rel="stylesheet">
 
   <script type="importmap">
   {
@@ -167,6 +253,7 @@
 <video id="webcam" autoplay playsinline muted></video>
 <canvas id="three-canvas"></canvas>
 <div id="flash"></div>
+<div id="summon-text"><span id="summon-line"></span></div>
 
 <div id="ui">
   <div id="hand-status">
@@ -187,12 +274,13 @@
     </svg>
   </div>
 
-  <div id="status">Initializing camera...</div>
+  <div id="bottom-bar">
+    <button class="bottom-btn" id="btn-mute" title="Toggle audio">&#128266;</button>
+    <div id="status">Initializing camera...</div>
+    <button class="bottom-btn" id="btn-restart" title="Restart">&#8635;</button>
+  </div>
 </div>
 
-<!-- FBX drop zone fallback -->
-
-<!-- Adjust panel -->
 
 <!-- MediaPipe Hands (legacy bundle, no ES module needed) -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
@@ -246,15 +334,17 @@ scene.add(fillLight);
 // ─── FBX LOADER ──────────────────────────────────────────────────────────────
 let landModel  = null;  let landMixer  = null;  let landAction  = null;
 let roarModel  = null;  let roarMixer  = null;  let roarAction  = null;
+let idleModel  = null;  let idleMixer  = null;  let idleAction  = null;
 let landReady  = false;
 let roarReady  = false;
+let idleReady  = false;
 let isAnimating    = false;
 let chargeProgress = 0;
 
 
 const fbxLoader = new FBXLoader();
 
-const MODEL = { scale: 585, posX: 0, posY: -306, posZ: -80, rotX: 0, rotY: 0, rotZ: 0 };
+const MODEL = { scale: 480, posX: 0, posY: -306, posZ: -80, rotX: 12, rotY: 0, rotZ: 0 };
 
 function applyTransformToModel(fbx) {
   const box    = new THREE.Box3().setFromObject(fbx);
@@ -277,7 +367,7 @@ function applyTransformToModel(fbx) {
 }
 
 function checkAllLoaded() {
-  if (landReady && roarReady) {
+  if (landReady && roarReady && idleReady) {
     setStatus('Raise both fists to summon Mahoraga!');
   }
 }
@@ -314,7 +404,7 @@ fbxLoader.load('Roar.fbx', (fbx) => {
   if (fbx.animations?.length) {
     roarMixer  = new THREE.AnimationMixer(fbx);
     roarAction = roarMixer.clipAction(fbx.animations[0]);
-    roarAction.setLoop(THREE.LoopRepeat, 3);
+    roarAction.setLoop(THREE.LoopOnce);
     roarAction.clampWhenFinished = true;
   }
 
@@ -327,13 +417,83 @@ fbxLoader.load('Roar.fbx', (fbx) => {
   setStatus('Error loading Roar.fbx — check console');
 });
 
+// Load Idle.fbx
+fbxLoader.load('Idle.fbx', (fbx) => {
+  idleModel = fbx;
+  applyTransformToModel(fbx);
+  fbx.visible = false;
+  scene.add(fbx);
+
+  if (fbx.animations?.length) {
+    idleMixer  = new THREE.AnimationMixer(fbx);
+    idleAction = idleMixer.clipAction(fbx.animations[0]);
+    idleAction.setLoop(THREE.LoopRepeat);
+  }
+
+  idleReady = true;
+  checkAllLoaded();
+}, null, (err) => {
+  console.error('Idle.fbx load error:', err);
+  setStatus('Error loading Idle.fbx — check console');
+});
+
 
 // ─── SUMMON SEQUENCE ──────────────────────────────────────────────────────────
-function triggerSummon() {
+const summonTextEl = document.getElementById('summon-text');
+const summonLineEl = document.getElementById('summon-line');
+
+// ── Web Audio ─────────────────────────────────────────────────────────────────
+const audioCtx   = new (window.AudioContext || window.webkitAudioContext)();
+const masterGain = audioCtx.createGain();
+masterGain.connect(audioCtx.destination);
+const clipBuffers = []; // filled by preloadAudio()
+
+async function preloadAudio() {
+  const urls = [1,2,3,4,5,6].map(i => `clip%20${i}.mp3`);
+  const results = await Promise.all(urls.map(async url => {
+    try {
+      const res = await fetch(url);
+      const ab  = await res.arrayBuffer();
+      return audioCtx.decodeAudioData(ab);
+    } catch { return null; }
+  }));
+  clipBuffers.push(...results);
+}
+preloadAudio().catch(console.error);
+
+function playBuffer(buffer, when) {
+  if (!buffer) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(masterGain);
+  src.start(when !== undefined ? when : audioCtx.currentTime);
+}
+
+// Show a text flash for exactly `holdMs` milliseconds then fade out.
+let _summonTimer = null;
+function showSummonText(text, cssClass, holdMs) {
+  clearTimeout(_summonTimer);
+  const wasVisible = summonTextEl.classList.contains('visible');
+  summonTextEl.className = cssClass;   // update class (strips visible too)
+  summonLineEl.textContent = text;
+  if (!wasVisible) {
+    // Only force reflow on first appearance so the fade-in transition fires.
+    // If already visible, skip it — browser batches the class changes and
+    // opacity stays at 1 with no flicker.
+    summonTextEl.getBoundingClientRect();
+  }
+  summonTextEl.classList.add('visible');
+  _summonTimer = setTimeout(() => summonTextEl.classList.remove('visible'), holdMs);
+}
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function triggerSummon() {
   if (!landReady || !roarReady || isAnimating) return;
   isAnimating = true;
+  setStatus('');
 
-  // Flash
+  // Initial flash
   flashEl.style.transition = 'none';
   flashEl.style.opacity = '0.85';
   requestAnimationFrame(() => {
@@ -343,13 +503,45 @@ function triggerSummon() {
   keyLight.intensity = 12;
   setTimeout(() => { keyLight.intensity = 3; }, 300);
 
-  // Step 1: Land.fbx — play once
+  // ── Text + audio sequence ──────────────────────────────────────────────────
+  // Resume context if browser suspended it (autoplay policy)
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+  // Schedule all 4 clips back-to-back with zero gap.
+  // Capture origin FIRST so setTimeout delays are relative to the same point.
+  const textDefs = [
+    { text: 'With this treasure, I summon...', cssClass: 'line1' },
+    { text: 'Eight-Handled Sword',              cssClass: 'line2' },
+    { text: 'Divergent Sila Divine General',    cssClass: 'line2' },
+    { text: 'MAHORAGA',                         cssClass: 'line3' },
+  ];
+
+  const origin  = audioCtx.currentTime;
+  let   schedAt = origin;
+
+  textDefs.forEach((def, i) => {
+    const buf      = clipBuffers[i];
+    const duration = buf ? buf.duration : 2;
+    const startMs  = (schedAt - origin) * 1000;
+
+    if (buf) playBuffer(buf, schedAt);
+    setTimeout(() => showSummonText(def.text, def.cssClass, duration * 1000), startMs);
+    schedAt += duration;
+  });
+
+  // Wait for last clip to finish + text fade-out
+  const totalMs = (schedAt - origin) * 1000 + 800;
+  await delay(totalMs);
+
+  // ── FBX sequence ──────────────────────────────────────────────────────────
   if (roarModel) roarModel.visible = false;
   if (landModel) {
     landModel.visible = true;
     if (landAction) {
       landAction.reset();
+      landAction.setEffectiveTimeScale(0.6); // ~40% slower
       landAction.play();
+      playBuffer(clipBuffers[4]); // clip 5 in sync with Land.fbx
 
       const onLandDone = () => {
         landMixer.removeEventListener('finished', onLandDone);
@@ -358,21 +550,19 @@ function triggerSummon() {
       };
       landMixer.addEventListener('finished', onLandDone);
     } else {
-      // no clip on Land — skip straight to Roar
       landModel.visible = false;
       playRoar();
     }
   } else {
     playRoar();
   }
-
-  setStatus('');
 }
 
-// Step 2: Roar.fbx — play 3 times then hide
+// Step 2: Roar.fbx — play once then hand off to Idle
 function playRoar() {
-  if (!roarModel) { finish(); return; }
+  if (!roarModel) { playIdle(); return; }
   roarModel.visible = true;
+  playBuffer(clipBuffers[5]); // clip 6 in sync with Roar.fbx
   if (roarAction) {
     roarAction.reset();
     roarAction.play();
@@ -380,12 +570,23 @@ function playRoar() {
     const onRoarDone = () => {
       roarMixer.removeEventListener('finished', onRoarDone);
       roarModel.visible = false;
-      finish();
+      playIdle();
     };
     roarMixer.addEventListener('finished', onRoarDone);
   } else {
-    setTimeout(() => { roarModel.visible = false; finish(); }, 3000);
+    setTimeout(() => { roarModel.visible = false; playIdle(); }, 3000);
   }
+}
+
+// Step 3: Idle.fbx — loop until restart
+function playIdle() {
+  if (!idleModel) { finish(); return; }
+  idleModel.visible = true;
+  if (idleAction) {
+    idleAction.reset();
+    idleAction.play();
+  }
+  finish();
 }
 
 function finish() {
@@ -403,6 +604,7 @@ function animateScene() {
 
   if (landMixer) landMixer.update(delta);
   if (roarMixer) roarMixer.update(delta);
+  if (idleMixer) idleMixer.update(delta);
 
   // Pulse key light during charge
   if (chargeProgress > 0 && !isAnimating) {
@@ -538,6 +740,35 @@ async function startCamera() {
     console.error(err);
   }
 }
+
+// ─── MUTE TOGGLE ─────────────────────────────────────────────────────────────
+let muted = false;
+document.getElementById('btn-mute').addEventListener('click', () => {
+  muted = !muted;
+  masterGain.gain.setTargetAtTime(muted ? 0 : 1, audioCtx.currentTime, 0.05);
+  document.getElementById('btn-mute').innerHTML = muted ? '&#128263;' : '&#128266;';
+});
+
+// ─── RESTART ─────────────────────────────────────────────────────────────────
+document.getElementById('btn-restart').addEventListener('click', () => {
+  isAnimating = false;
+  chargeStart = null;
+  chargeProgress = 0;
+  chargeWrap.classList.remove('visible');
+  chargeFill.style.strokeDashoffset = CIRCUMFERENCE;
+
+  if (landMixer) landMixer.stopAllAction();
+  if (roarMixer) roarMixer.stopAllAction();
+  if (idleMixer) idleMixer.stopAllAction();
+  if (landModel) landModel.visible = false;
+  if (roarModel) roarModel.visible = false;
+  if (idleModel) idleModel.visible = false;
+
+  summonTextEl.classList.remove('visible');
+  summonTextEl.className = '';
+
+  setStatus('Raise both fists to summon Mahoraga!');
+});
 
 startCamera();
 </script>
