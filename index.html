@@ -239,6 +239,49 @@
       color: rgba(255,255,255,0.8);
     }
 
+    /* ── Start pose hint ── */
+    #start-hint {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      z-index: 3;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.9s ease;
+      text-align: center;
+    }
+
+    #start-hint.visible { opacity: 1; }
+
+    #start-hint img {
+      width: 210px;
+      opacity: 0.55;
+      filter: drop-shadow(0 0 24px rgba(255,255,255,0.08));
+    }
+
+    #start-hint.visible img {
+      animation: hint-breathe 3s ease-in-out infinite;
+    }
+
+    @keyframes hint-breathe {
+      0%, 100% { opacity: 0.55; }
+      50%       { opacity: 0.75; }
+    }
+
+    #start-hint p {
+      font-family: 'Cinzel', serif;
+      font-size: 13px;
+      color: rgba(255,255,255,0.45);
+      letter-spacing: 0.06em;
+      max-width: 270px;
+      line-height: 1.6;
+    }
+
     /* ── Dark Souls summon text ── */
     #summon-text {
       position: fixed;
@@ -376,6 +419,12 @@
 </div>
 
 
+<!-- Start pose hint -->
+<div id="start-hint">
+  <img src="start%20pose.png" alt="Start pose">
+  <p>Put your hands in position to summon the treasure</p>
+</div>
+
 <!-- MediaPipe Hands (legacy bundle, no ES module needed) -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
 
@@ -472,9 +521,12 @@ function applyTransformToModel(fbx) {
   });
 }
 
+const startHintEl = document.getElementById('start-hint');
+
 function checkAllLoaded() {
   if (landReady && roarReady && idleReady) {
     setStatus('Raise both fists to summon Mahoraga!');
+    startHintEl.classList.add('visible');
   }
 }
 
@@ -598,6 +650,7 @@ async function triggerSummon() {
   if (!landReady || !roarReady || isAnimating) return;
   isAnimating = true;
   hasSummoned = true;
+  startHintEl.classList.remove('visible');
   setStatus('');
 
   // Initial flash
@@ -945,6 +998,7 @@ document.getElementById('btn-restart').addEventListener('click', () => {
   summonTextEl.className = '';
 
   setStatus('Raise both fists to summon Mahoraga!');
+  startHintEl.classList.add('visible');
 });
 
 startCamera();
